@@ -21,6 +21,7 @@ class WutongFamilyPlugin(Star):
         self.config = config
         self.http = httpx.AsyncClient(timeout=self.config.get("timeout", 30))
         self.session_cache: Dict[str, int] = {}
+        self.pending_cache: Dict[str, Dict[str, str]] = {}
 
     def _get_base_url(self) -> str:
         base_url = self.config.get("base_url", "http://127.0.0.1:8000")
@@ -101,6 +102,13 @@ class WutongFamilyPlugin(Star):
         if "assistant_message" in payload:
             msg = payload.get("assistant_message", {}).get("content", "")
             qr = payload.get("query_result")
+            if qr and qr.get("pending_confirmation"):
+                plan = qr.get("execution_plan") or msg
+                return (
+                    f"{plan}\n\n"
+                    "如需执行，请回复：/执行\n"
+                    "如需修改/拒绝，请回复：/拒绝 你的修改意见"
+                ).strip()
             if qr and qr.get("success") and qr.get("data"):
                 preview = self._format_preview(qr.get("data"), max_rows)
                 return f"{msg}\n{preview}".strip()
@@ -154,10 +162,82 @@ class WutongFamilyPlugin(Star):
                 resp.raise_for_status()
                 payload = resp.json()
 
+            # cache pending execution if present
+            qr = payload.get("query_result") if isinstance(payload, dict) else None
+            if qr and qr.get("pending_confirmation") and user_key:
+                self.pending_cache[user_key] = {
+                    "action_type": qr.get("action_type", "sql"),
+                    "code": qr.get("code") or qr.get("sql") or "",
+                    "original_query": query,
+                }
+
             yield event.plain_result(self._format_result(payload))
         except Exception as exc:
             logger.exception("wutong-family query failed")
             yield event.plain_result(f"请求失败：{exc}")
 
+    @filter.command("执行")
+    async def execute(self, event: AstrMessageEvent, message: str = ""):
+        user_key = self._get_sender_key(event)
+        pending = self.pending_cache.get(user_key)
+        if not pending:
+            yield event.plain_result("没有待执行的操作，请先用 /查 提交请求。")
+            return
+
+        base_url = self._get_base_url()
+        headers = self._get_headers()
+        session_id = await self._get_session_id(user_key)
+
+        try:
+            resp = await self.http.post(
+                f"{base_url}/api/chat/sessions/{session_id}/execute_sql/",
+                json={
+                    "action_type": pending.get("action_type", "sql"),
+                    "code": pending.get("code", ""),
+                    "original_query": pending.get("original_query", ""),
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            # clear pending on success
+            if payload.get("success"):
+                self.pending_cache.pop(user_key, None)
+            yield event.plain_result(self._format_result(payload))
+        except Exception as exc:
+            logger.exception("wutong-family execute failed")
+            yield event.plain_result(f"执行失败：{exc}")
+
+    @filter.command("拒绝")
+    async def reject(self, event: AstrMessageEvent, message: str = ""):
+        user_key = self._get_sender_key(event)
+        pending = self.pending_cache.get(user_key)
+        if not pending:
+            yield event.plain_result("没有待执行的操作。")
+            return
+
+        instruction = (message or "").strip()
+        base_url = self._get_base_url()
+        headers = self._get_headers()
+        session_id = await self._get_session_id(user_key)
+        try:
+            resp = await self.http.post(
+                f"{base_url}/api/chat/sessions/{session_id}/execute_sql/",
+                json={
+                    "action_type": pending.get("action_type", "sql"),
+                    "code": pending.get("code", ""),
+                    "original_query": pending.get("original_query", ""),
+                    "action": "reject",
+                    "instruction": instruction,
+                },
+                headers=headers,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+            self.pending_cache.pop(user_key, None)
+            yield event.plain_result(self._format_result(payload))
+        except Exception as exc:
+            logger.exception("wutong-family reject failed")
+            yield event.plain_result(f"拒绝失败：{exc}")
     async def terminate(self):
         await self.http.aclose()
