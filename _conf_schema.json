@@ -1,0 +1,28 @@
+{
+  "base_url": {
+    "type": "string",
+    "description": "wutong-family 后端地址",
+    "default": "http://127.0.0.1:8000"
+  },
+  "mode": {
+    "type": "string",
+    "description": "调用方式：session(对话) 或 data(单次)",
+    "default": "session",
+    "options": ["session", "data"]
+  },
+  "api_token": {
+    "type": "string",
+    "description": "可选的 API Token",
+    "default": ""
+  },
+  "timeout": {
+    "type": "int",
+    "description": "请求超时（秒）",
+    "default": 30
+  },
+  "preview_rows": {
+    "type": "int",
+    "description": "返回结果预览行数",
+    "default": 3
+  }
+}
