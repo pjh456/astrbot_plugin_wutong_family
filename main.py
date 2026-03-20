@@ -173,16 +173,19 @@ class WutongFamilyPlugin(Star):
             resp.raise_for_status()
             tmp_path = Path("/tmp") / f"report_{report_id}.pdf"
             tmp_path.write_bytes(resp.content)
-            # Build file component in a compatible way across versions
-            if hasattr(Comp.File, "fromPath"):
-                file_comp = Comp.File.fromPath(str(tmp_path))
-            elif hasattr(Comp.File, "fromFile"):
-                file_comp = Comp.File.fromFile(str(tmp_path))
-            else:
-                file_comp = Comp.File(file=f"file://{tmp_path}", name=tmp_path.name)
+            # NapCat (OneBot) supports file message via base64://
+            import base64
 
+            b64 = base64.b64encode(tmp_path.read_bytes()).decode("utf-8")
+            file_comp = Comp.File(file=f"base64://{b64}", name=tmp_path.name)
             chain = [Comp.Plain("报告已生成："), file_comp]
-            yield event.chain_result(chain)
+            try:
+                yield event.chain_result(chain)
+            except Exception:
+                yield event.plain_result(
+                    f"文件发送失败，下载地址：{download_url}\n"
+                    f"进度查询：{base_url}/api/reports/{report_id}/progress/"
+                )
         except Exception as exc:
             logger.exception("wutong-family download report failed")
             yield event.plain_result(f"报告下载失败：{exc}\\n下载地址：{download_url}")
