@@ -116,14 +116,16 @@ class WutongFamilyPlugin(Star):
 
     @filter.command("查")
     async def query(self, event: AstrMessageEvent, message: str = ""):
-        query = (message or "").strip()
+        # Prefer raw message to avoid framework truncation
+        text = getattr(event, "message_str", "") or ""
+        text = text.replace("\u3000", " ")  # normalize full-width spaces
+        query = ""
+        if text.startswith("/查"):
+            query = text[2:].strip()
+        elif text.startswith("查"):
+            query = text[1:].strip()
         if not query:
-            # Fallback: extract message text if framework didn't pass args
-            text = getattr(event, "message_str", "") or ""
-            if text.startswith("/查"):
-                query = text[2:].strip()
-            elif text.startswith("查"):
-                query = text[1:].strip()
+            query = (message or "").strip()
         if not query:
             yield event.plain_result("用法：/查 统计各区域用户数量")
             return
