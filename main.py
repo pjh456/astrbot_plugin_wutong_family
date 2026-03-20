@@ -8,7 +8,13 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 
-@register("wutong-family", "pjh", "wutong-family QQ 自然语言查询插件", "0.1.0")
+@register(
+    "wutong-family",
+    "pjh456",
+    "wutong-family QQ 自然语言查询插件",
+    "0.1.1",
+    "https://github.com/pjh456/astrbot_plugin_wutong_family",
+)
 class WutongFamilyPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -109,8 +115,15 @@ class WutongFamilyPlugin(Star):
         return payload.get("response") or payload.get("error") or "查询失败"
 
     @filter.command("查")
-    async def query(self, event: AstrMessageEvent, *args):
-        query = " ".join(args).strip()
+    async def query(self, event: AstrMessageEvent, message: str = ""):
+        query = (message or "").strip()
+        if not query:
+            # Fallback: extract message text if framework didn't pass args
+            text = getattr(event, "message_str", "") or ""
+            if text.startswith("/查"):
+                query = text[2:].strip()
+            elif text.startswith("查"):
+                query = text[1:].strip()
         if not query:
             yield event.plain_result("用法：/查 统计各区域用户数量")
             return
