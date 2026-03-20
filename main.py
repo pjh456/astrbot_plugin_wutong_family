@@ -173,10 +173,15 @@ class WutongFamilyPlugin(Star):
             resp.raise_for_status()
             tmp_path = Path("/tmp") / f"report_{report_id}.pdf"
             tmp_path.write_bytes(resp.content)
-            chain = [
-                Comp.Plain("报告已生成："),
-                Comp.File(file=str(tmp_path), name=tmp_path.name),
-            ]
+            # Build file component in a compatible way across versions
+            if hasattr(Comp.File, "fromPath"):
+                file_comp = Comp.File.fromPath(str(tmp_path))
+            elif hasattr(Comp.File, "fromFile"):
+                file_comp = Comp.File.fromFile(str(tmp_path))
+            else:
+                file_comp = Comp.File(file=f"file://{tmp_path}", name=tmp_path.name)
+
+            chain = [Comp.Plain("报告已生成："), file_comp]
             yield event.chain_result(chain)
         except Exception as exc:
             logger.exception("wutong-family download report failed")
