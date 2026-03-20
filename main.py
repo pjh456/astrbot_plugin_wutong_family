@@ -105,6 +105,12 @@ class WutongFamilyPlugin(Star):
 
     def _format_result(self, payload: Dict[str, Any]) -> str:
         max_rows = int(self.config.get("preview_rows", 3))
+        report_id = None
+        if isinstance(payload, dict):
+            if isinstance(payload.get("query_result"), dict):
+                report_id = payload["query_result"].get("report_id")
+            if not report_id:
+                report_id = payload.get("report_id")
 
         if "assistant_message" in payload:
             msg = payload.get("assistant_message", {}).get("content", "")
@@ -119,13 +125,18 @@ class WutongFamilyPlugin(Star):
             if qr and qr.get("success") and qr.get("data"):
                 preview = self._format_preview(qr.get("data"), max_rows)
                 return f"{msg}\n{preview}".strip()
+            if report_id:
+                msg = f"{msg}\n报告ID：{report_id}（可用 /报告 {report_id} 获取）"
             return msg or "查询完成。"
 
         if payload.get("success"):
             preview = self._format_preview(payload.get("data"), max_rows)
             if preview:
                 return f"查询成功，返回 {payload.get('count', 0)} 条。\n{preview}".strip()
-            return payload.get("response") or "查询成功。"
+            base = payload.get("response") or "查询成功。"
+            if report_id:
+                base = f"{base}\n报告ID：{report_id}（可用 /报告 {report_id} 获取）"
+            return base
 
         return payload.get("response") or payload.get("error") or "查询失败"
 
@@ -145,7 +156,10 @@ class WutongFamilyPlugin(Star):
         send_file = bool(self.config.get("send_report_file", False))
 
         if not send_file:
-            yield event.plain_result(f"报告已生成（或正在生成）：{download_url}")
+            yield event.plain_result(
+                f"报告下载地址：{download_url}\n"
+                f"进度查询：{base_url}/api/reports/{report_id}/progress/"
+            )
             return
 
         try:
@@ -227,6 +241,10 @@ class WutongFamilyPlugin(Star):
                 if qr.get("report_id"):
                     async for msg in self._send_report(event, int(qr.get("report_id"))):
                         yield msg
+            # fallback: report_id may be at top-level
+            elif isinstance(payload, dict) and payload.get("report_id"):
+                async for msg in self._send_report(event, int(payload.get("report_id"))):
+                    yield msg
         except Exception as exc:
             logger.exception("wutong-family query failed")
             yield event.plain_result(f"请求失败：{exc}")
@@ -267,6 +285,9 @@ class WutongFamilyPlugin(Star):
                 if qr.get("report_id"):
                     async for msg in self._send_report(event, int(qr.get("report_id"))):
                         yield msg
+            elif isinstance(payload, dict) and payload.get("report_id"):
+                async for msg in self._send_report(event, int(payload.get("report_id"))):
+                    yield msg
         except Exception as exc:
             logger.exception("wutong-family execute failed")
             yield event.plain_result(f"执行失败：{exc}")
@@ -311,5 +332,34 @@ class WutongFamilyPlugin(Star):
             return
         async for msg in self._send_report(event, int(rid)):
             yield msg
+
+    @filter.command("报告列表")
+    async def report_list(self, event: AstrMessageEvent, limit: str = "5"):
+        try:
+            n = int(limit)
+        except Exception:
+            n = 5
+        n = max(1, min(n, 20))
+        base_url = self._get_base_url()
+        headers = self._get_headers()
+        try:
+            resp = await self.http.get(f"{base_url}/api/reports/?page_size={n}", headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results") if isinstance(data, dict) else data
+            if not results:
+                yield event.plain_result("暂无报告。")
+                return
+            lines = ["最新报告列表："]
+            for r in results[:n]:
+                rid = r.get("id")
+                title = r.get("title", "")
+                status = r.get("status", "")
+                lines.append(f"- {rid} | {status} | {title}")
+            lines.append("使用 /报告 <ID> 下载")
+            yield event.plain_result("\n".join(lines))
+        except Exception as exc:
+            logger.exception("wutong-family report list failed")
+            yield event.plain_result(f"获取报告列表失败：{exc}")
     async def terminate(self):
         await self.http.aclose()
