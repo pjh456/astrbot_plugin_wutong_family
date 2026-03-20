@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict
 
 import httpx
+import astrbot.api.message_components as Comp
+from pathlib import Path
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -32,6 +34,11 @@ class WutongFamilyPlugin(Star):
         if token:
             return {"Authorization": f"Bearer {token}"}
         return {}
+
+    def _abs_url(self, maybe_path: str) -> str:
+        if maybe_path.startswith("http://") or maybe_path.startswith("https://"):
+            return maybe_path
+        return f"{self._get_base_url()}{maybe_path if maybe_path.startswith('/') else '/' + maybe_path}"
 
     def _get_sender_key(self, event: AstrMessageEvent) -> str:
         # Try multiple APIs to stay compatible across AstrBot versions
@@ -122,6 +129,45 @@ class WutongFamilyPlugin(Star):
 
         return payload.get("response") or payload.get("error") or "查询失败"
 
+    async def _send_charts(self, event: AstrMessageEvent, chart_urls: list[str]):
+        if not chart_urls:
+            return
+        chain = [Comp.Plain("图表如下：")]
+        for url in chart_urls:
+            chain.append(Comp.Image.fromURL(self._abs_url(url)))
+        yield event.chain_result(chain)
+
+    async def _send_report(self, event: AstrMessageEvent, report_id: int):
+        if not report_id:
+            return
+        base_url = self._get_base_url()
+        download_url = f"{base_url}/api/reports/{report_id}/download/"
+        send_file = bool(self.config.get("send_report_file", False))
+
+        if not send_file:
+            yield event.plain_result(f"报告已生成（或正在生成）：{download_url}")
+            return
+
+        try:
+            resp = await self.http.get(download_url, headers=self._get_headers())
+            if resp.status_code == 400:
+                yield event.plain_result(
+                    f"报告生成中：{base_url}/api/reports/{report_id}/progress/\\n"
+                    f"稍后可用 /报告 {report_id} 获取。"
+                )
+                return
+            resp.raise_for_status()
+            tmp_path = Path("/tmp") / f"report_{report_id}.pdf"
+            tmp_path.write_bytes(resp.content)
+            chain = [
+                Comp.Plain("报告已生成："),
+                Comp.File(file=str(tmp_path), name=tmp_path.name),
+            ]
+            yield event.chain_result(chain)
+        except Exception as exc:
+            logger.exception("wutong-family download report failed")
+            yield event.plain_result(f"报告下载失败：{exc}\\n下载地址：{download_url}")
+
     @filter.command("查")
     async def query(self, event: AstrMessageEvent, message: str = ""):
         # Prefer raw message to avoid framework truncation
@@ -172,6 +218,15 @@ class WutongFamilyPlugin(Star):
                 }
 
             yield event.plain_result(self._format_result(payload))
+
+            qr = payload.get("query_result") if isinstance(payload, dict) else None
+            if isinstance(qr, dict):
+                chart_urls = qr.get("chart_urls") or []
+                async for msg in self._send_charts(event, chart_urls):
+                    yield msg
+                if qr.get("report_id"):
+                    async for msg in self._send_report(event, int(qr.get("report_id"))):
+                        yield msg
         except Exception as exc:
             logger.exception("wutong-family query failed")
             yield event.plain_result(f"请求失败：{exc}")
@@ -204,6 +259,14 @@ class WutongFamilyPlugin(Star):
             if payload.get("success"):
                 self.pending_cache.pop(user_key, None)
             yield event.plain_result(self._format_result(payload))
+            qr = payload.get("query_result") if isinstance(payload, dict) else None
+            if isinstance(qr, dict):
+                chart_urls = qr.get("chart_urls") or []
+                async for msg in self._send_charts(event, chart_urls):
+                    yield msg
+                if qr.get("report_id"):
+                    async for msg in self._send_report(event, int(qr.get("report_id"))):
+                        yield msg
         except Exception as exc:
             logger.exception("wutong-family execute failed")
             yield event.plain_result(f"执行失败：{exc}")
@@ -239,5 +302,14 @@ class WutongFamilyPlugin(Star):
         except Exception as exc:
             logger.exception("wutong-family reject failed")
             yield event.plain_result(f"拒绝失败：{exc}")
+
+    @filter.command("报告")
+    async def report(self, event: AstrMessageEvent, report_id: str = ""):
+        rid = (report_id or "").strip()
+        if not rid.isdigit():
+            yield event.plain_result("用法：/报告 123")
+            return
+        async for msg in self._send_report(event, int(rid)):
+            yield msg
     async def terminate(self):
         await self.http.aclose()

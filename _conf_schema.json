@@ -24,5 +24,10 @@
     "type": "int",
     "description": "返回结果预览行数",
     "default": 3
+  },
+  "send_report_file": {
+    "type": "bool",
+    "description": "是否尝试直接发送 PDF 文件（否则只发送下载链接）",
+    "default": false
   }
 }
