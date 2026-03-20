@@ -150,6 +150,40 @@ class WutongFamilyPlugin(Star):
 
         return payload.get("response") or payload.get("error") or "查询失败"
 
+    async def _send_text_or_image(self, event: AstrMessageEvent, text: str):
+        use_image = bool(self.config.get("render_markdown_as_image", False))
+        if not use_image or not text:
+            yield event.plain_result(text or "")
+            return
+
+        base_url = self._get_base_url()
+        width = int(self.config.get("markdown_render_width", 960))
+        scale = float(self.config.get("markdown_render_scale", 2.0))
+        css = self.config.get("markdown_render_css", "")
+        payload = {
+            "markdown": text,
+            "width": width,
+            "scale": scale,
+            "css": css,
+        }
+        try:
+            resp = await self.http.post(
+                f"{base_url}/api/markdown/render/",
+                json=payload,
+                headers=self._get_headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            image_url = data.get("image_url", "")
+            if image_url:
+                chain = [Comp.Image.fromURL(self._abs_url(image_url))]
+                yield event.chain_result(chain)
+                return
+            yield event.plain_result(text)
+        except Exception as exc:
+            logger.exception("wutong-family markdown render failed")
+            yield event.plain_result(f"{text}\n\n[图片渲染失败：{exc}]")
+
     async def _send_charts(self, event: AstrMessageEvent, chart_urls: list[str]):
         if not chart_urls:
             return
@@ -275,7 +309,9 @@ class WutongFamilyPlugin(Star):
                     "original_query": query,
                 }
 
-            yield event.plain_result(self._format_result(payload))
+            text = self._format_result(payload)
+            async for msg in self._send_text_or_image(event, text):
+                yield msg
 
             qr = payload.get("query_result") if isinstance(payload, dict) else None
             if isinstance(qr, dict):
@@ -320,7 +356,9 @@ class WutongFamilyPlugin(Star):
             # clear pending on success
             if payload.get("success"):
                 self.pending_cache.pop(user_key, None)
-            yield event.plain_result(self._format_result(payload))
+            text = self._format_result(payload)
+            async for msg in self._send_text_or_image(event, text):
+                yield msg
             qr = payload.get("query_result") if isinstance(payload, dict) else None
             if isinstance(qr, dict):
                 chart_urls = qr.get("chart_urls") or []
@@ -363,7 +401,9 @@ class WutongFamilyPlugin(Star):
             resp.raise_for_status()
             payload = resp.json()
             self.pending_cache.pop(user_key, None)
-            yield event.plain_result(self._format_result(payload))
+            text = self._format_result(payload)
+            async for msg in self._send_text_or_image(event, text):
+                yield msg
         except Exception as exc:
             logger.exception("wutong-family reject failed")
             yield event.plain_result(f"拒绝失败：{exc}")
@@ -401,7 +441,9 @@ class WutongFamilyPlugin(Star):
                 status = r.get("status", "")
                 lines.append(f"- {rid} | {status} | {title}")
             lines.append("使用 /报告 <ID> 下载")
-            yield event.plain_result("\n".join(lines))
+            text = "\n".join(lines)
+            async for msg in self._send_text_or_image(event, text):
+                yield msg
         except Exception as exc:
             logger.exception("wutong-family report list failed")
             yield event.plain_result(f"获取报告列表失败：{exc}")

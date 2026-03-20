@@ -39,5 +39,25 @@
     "type": "string",
     "description": "NapCat OneBot HTTP API Token（可选）",
     "default": ""
+  },
+  "render_markdown_as_image": {
+    "type": "bool",
+    "description": "是否将回复 Markdown 渲染为图片",
+    "default": false
+  },
+  "markdown_render_width": {
+    "type": "int",
+    "description": "Markdown 渲染图片宽度（像素）",
+    "default": 960
+  },
+  "markdown_render_scale": {
+    "type": "float",
+    "description": "Markdown 渲染图片缩放（1.0-3.0）",
+    "default": 2.0
+  },
+  "markdown_render_css": {
+    "type": "string",
+    "description": "Markdown 渲染附加 CSS（可选）",
+    "default": ""
   }
 }
