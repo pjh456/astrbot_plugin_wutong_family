@@ -29,5 +29,15 @@
     "type": "bool",
     "description": "是否尝试直接发送 PDF 文件（否则只发送下载链接）",
     "default": false
+  },
+  "napcat_http_url": {
+    "type": "string",
+    "description": "NapCat OneBot HTTP API 地址（用于发送文件），例如 http://napcat:3000",
+    "default": ""
+  },
+  "napcat_token": {
+    "type": "string",
+    "description": "NapCat OneBot HTTP API Token（可选）",
+    "default": ""
   }
 }

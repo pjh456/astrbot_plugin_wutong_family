@@ -35,6 +35,16 @@ class WutongFamilyPlugin(Star):
             return {"Authorization": f"Bearer {token}"}
         return {}
 
+    def _get_napcat_headers(self) -> Dict[str, str]:
+        token = self.config.get("napcat_token", "")
+        if token:
+            return {"Authorization": f"Bearer {token}"}
+        return {}
+
+    def _get_napcat_http_url(self) -> str:
+        url = self.config.get("napcat_http_url", "")
+        return str(url).rstrip("/")
+
     def _abs_url(self, maybe_path: str) -> str:
         if maybe_path.startswith("http://") or maybe_path.startswith("https://"):
             return maybe_path
@@ -173,19 +183,45 @@ class WutongFamilyPlugin(Star):
             resp.raise_for_status()
             tmp_path = Path("/tmp") / f"report_{report_id}.pdf"
             tmp_path.write_bytes(resp.content)
-            # NapCat (OneBot) supports file message via base64://
-            import base64
+            napcat_url = self._get_napcat_http_url()
+            # Prefer NapCat HTTP API upload (reliable for file delivery)
+            if napcat_url:
+                import base64
 
-            b64 = base64.b64encode(tmp_path.read_bytes()).decode("utf-8")
-            file_comp = Comp.File(file=f"base64://{b64}", name=tmp_path.name)
-            chain = [Comp.Plain("报告已生成："), file_comp]
-            try:
-                yield event.chain_result(chain)
-            except Exception:
+                b64 = base64.b64encode(tmp_path.read_bytes()).decode("utf-8")
+                file_payload = f"base64://{b64}"
+
+                group_id = ""
+                if hasattr(event, "get_group_id"):
+                    try:
+                        group_id = str(event.get_group_id() or "")
+                    except Exception:
+                        group_id = ""
+                if not group_id:
+                    group_id = str(getattr(event.message_obj, "group_id", "") or "")
+
+                if group_id:
+                    url = f"{napcat_url}/upload_group_file"
+                    params = {"group_id": group_id, "file": file_payload, "name": tmp_path.name}
+                else:
+                    user_id = str(event.get_sender_id())
+                    url = f"{napcat_url}/upload_private_file"
+                    params = {"user_id": user_id, "file": file_payload, "name": tmp_path.name}
+
+                api_resp = await self.http.post(url, json=params, headers=self._get_napcat_headers())
+                api_resp.raise_for_status()
+                data = api_resp.json()
+                if data.get("status") == "ok" and data.get("retcode", 0) == 0:
+                    yield event.plain_result("报告文件已发送。")
+                    return
                 yield event.plain_result(
-                    f"文件发送失败，下载地址：{download_url}\n"
-                    f"进度查询：{base_url}/api/reports/{report_id}/progress/"
+                    f"文件发送失败（NapCat 返回异常），下载地址：{download_url}"
                 )
+                return
+
+            # Fallback: message chain (may fail on some adapters)
+            file_comp = Comp.File(file=str(tmp_path), name=tmp_path.name)
+            yield event.chain_result([Comp.Plain("报告已生成："), file_comp])
         except Exception as exc:
             logger.exception("wutong-family download report failed")
             yield event.plain_result(f"报告下载失败：{exc}\\n下载地址：{download_url}")
